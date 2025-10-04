@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Icon Gallery (from local JSON)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Noto Sans", "PingFang SC", "Hiragino Sans GB", sans-serif; margin: 0; background: #f7f9fc; color: #0f172a; }
+    .wrap { max-width: 1200px; margin: 24px auto; padding: 0 16px; }
+    .bar { display: grid; grid-template-columns: 1fr max-content; gap: 16px; align-items: end; }
+    .field { display: grid; gap: 6px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; margin-top: 16px; }
+    .card { background: #fff; border-radius: 16px; padding: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.06); display:flex; flex-direction:column; align-items:center; }
+    .card img { object-fit: contain; }
+    .muted { color:#64748b; font-size:12px; }
+    .row { display:flex; gap:12px; align-items:center; }
+    input[type="text"] { height: 36px; border: 1px solid #e2e8f0; border-radius: 10px; padding: 0 10px; font-size:14px; }
+    input[type="range"] { width: 200px; }
+    .label { font-size:12px; color:#475569 }
+    .counter { margin-top: 8px; }
+    .name { margin-top: 8px; font-size:12px; width:100%; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#475569 }
+    .toolbar { display:flex; gap:8px; align-items:center; justify-content:space-between; margin-top: 10px; }
+    button { height: 32px; padding: 0 12px; border: 1px solid #e2e8f0; background:#fff; border-radius: 8px; cursor:pointer; }
+    button:hover { background:#f8fafc; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Icon Gallery（读取本地 JSON）</h1>
+    <div class="muted">服务端会从 <code>/icons.json</code> 提供数据，后端实际读取你配置的本地文件。</div>
+
+    <div class="bar" style="margin-top:16px;">
+      <div class="field">
+        <label class="label">搜索</label>
+        <input id="q" type="text" placeholder="按名称或 URL 过滤…" />
+      </div>
+      <div class="row">
+        <label class="label" for="size">图标大小：<span id="sizeLabel">64</span>px</label>
+        <input id="size" type="range" min="24" max="256" step="4" value="64" />
+        <button id="reload">重新加载</button>
+      </div>
+    </div>
+
+    <div class="counter muted" id="count"></div>
+    <div class="grid" id="grid"></div>
+  </div>
+
+<script>
+  const grid = document.getElementById("grid");
+  const q = document.getElementById("q");
+  const size = document.getElementById("size");
+  const sizeLabel = document.getElementById("sizeLabel");
+  const count = document.getElementById("count");
+  const reloadBtn = document.getElementById("reload");
+
+  let items = [];
+  let filtered = [];
+  let iconSize = 64;
+
+  // === 新：更健壮的 normalize，优先识别 { icons: [...] } ===
+  function normalize(input) {
+    try {
+      // 1) 典型格式：根对象 + icons 数组
+      if (input && typeof input === "object" && Array.isArray(input.icons)) {
+        const arr = input.icons
+          .filter(o => o && (typeof o.url === "string" || typeof o.src === "string"))
+          .map((o, i) => ({ url: o.url || o.src, name: o.name || o.id || `icon-${i+1}` }));
+        if (arr.length) return arr;
+      }
+
+      // 2) 直接数组：["url"] or [{url,name}]
+      if (Array.isArray(input)) {
+        if (input.every(v => typeof v === "string")) {
+          return input.map((url, i) => ({ url, name: `icon-${i+1}` }));
+        }
+        if (input.every(v => v && typeof v === "object" && ("url" in v || "src" in v))) {
+          return input.map((o, i) => ({ url: o.url || o.src, name: o.name || o.id || `icon-${i+1}` }))
+                      .filter(o => !!o.url);
+        }
+      }
+
+      // 3) 兜底：从任意对象深度提取所有看起来像链接的字符串
+      const urls = [];
+      const walk = (obj) => {
+        if (!obj) return;
+        if (typeof obj === "string") {
+          if (/^https?:\/\//i.test(obj) || /\.(svg|png|jpe?g|webp|gif)$/i.test(obj)) {
+            urls.push({ url: obj });
+          }
+        } else if (Array.isArray(obj)) obj.forEach(walk);
+        else if (typeof obj === "object") Object.values(obj).forEach(walk);
+      };
+      walk(input);
+      return urls.map((u, i) => ({ ...u, name: u.name || `icon-${i+1}` }));
+    } catch {
+      return [];
+    }
+  }
+
+  function render() {
+    grid.innerHTML = "";
+    count.textContent = `显示 ${filtered.length} / 共 ${items.length} 个图标`;
+    filtered.forEach((item, idx) => {
+      const card = document.createElement("div");
+      card.className = "card";
+
+      const img = document.createElement("img");
+      img.width = iconSize; img.height = iconSize;
+      img.alt = item.name || "icon";
+      img.loading = "lazy";
+      img.src = item.url;
+      img.onerror = () => {
+        // 加载失败用域名 favicon 兜底
+        let domain = "";
+        try { domain = new URL(item.url).hostname; } catch {}
+        img.src = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=${iconSize}`;
+      };
+
+      const name = document.createElement("div");
+      name.className = "name";
+      name.title = item.name || item.url;
+      name.textContent = item.name || item.url;
+
+      const toolbar = document.createElement("div");
+      toolbar.className = "toolbar";
+      const copyBtn = document.createElement("button");
+      copyBtn.textContent = "复制链接";
+      copyBtn.onclick = () => navigator.clipboard.writeText(item.url);
+      const dlBtn = document.createElement("button");
+      dlBtn.textContent = "下载";
+      dlBtn.onclick = () => {
+        const a = document.createElement("a");
+        a.href = item.url;
+        a.download = item.url.split("/").pop() || "icon";
+        document.body.appendChild(a);
+        a.click(); a.remove();
+      };
+      toolbar.appendChild(copyBtn); toolbar.appendChild(dlBtn);
+
+      card.appendChild(img); card.appendChild(name); card.appendChild(toolbar);
+      grid.appendChild(card);
+    });
+  }
+
+  function applyFilter() {
+    const s = q.value.trim().toLowerCase();
+    filtered = !s ? items : items.filter(i => (i.name || i.url).toLowerCase().includes(s));
+    render();
+  }
+
+  async function loadData() {
+    try {
+      const res = await fetch("/icons.json?ts=" + Date.now());
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      items = normalize(data);
+      filtered = items.slice();
+      render();
+
+      if (items.length === 0) {
+        alert("数据已加载但没有解析到任何 URL。请检查 JSON 结构或在控制台查看错误。");
+        console.warn("Loaded JSON but no icon URLs were found:", data);
+      }
+    } catch (e) {
+      alert("加载 /icons.json 失败： " + e.message);
+      console.error(e);
+    }
+  }
+
+  q.addEventListener("input", applyFilter);
+  size.addEventListener("input", () => {
+    iconSize = Number(size.value);
+    sizeLabel.textContent = iconSize;
+    render();
+  });
+  reloadBtn.addEventListener("click", loadData);
+
+  loadData();
+</script>
+
+</body>
+</html>
